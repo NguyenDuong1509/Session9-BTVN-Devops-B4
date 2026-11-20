@@ -1,0 +1,91 @@
+# ==============================================================================
+# GitLab CI/CD Pipeline - Quản lý nhân sự (Employee Service)
+# Bài tập 4: Đẩy Docker Image lên Docker Hub thông qua GitLab CI (Vận dụng chuyên sâu)
+# ==============================================================================
+
+# Định nghĩa 3 stages tuần tự trong quy trình CI/CD
+stages:
+  - test
+  - build
+  - dockerize
+
+# Cấu hình biến môi trường toàn cục
+variables:
+  # Cấu hình Database PostgreSQL cho Stage Test
+  POSTGRES_DB: hr_db
+  POSTGRES_USER: hr_user
+  POSTGRES_PASSWORD: hr_password
+  POSTGRES_HOST_AUTH_METHOD: trust
+  # Cấu hình Docker Image Tag & DinD TLS
+  IMAGE_TAG: "1.0.0"
+  DOCKER_TLS_CERTDIR: ""
+
+# ------------------------------------------------------------------------------
+# Stage 1: Kiểm thử tích hợp tự động với PostgreSQL Database (Test Stage)
+# ------------------------------------------------------------------------------
+test_job:
+  stage: test
+  image: gradle:7.6-jdk17
+  # Khai báo service PostgreSQL chạy song song với container kiểm thử
+  services:
+    - postgres:14-alpine
+  variables:
+    SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/hr_db
+    SPRING_DATASOURCE_USERNAME: hr_user
+    SPRING_DATASOURCE_PASSWORD: hr_password
+    SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+  before_script:
+    - chmod +x ./gradlew
+  script:
+    - echo "================================================================"
+    - echo "===> Stage 1: Chạy Unit & Integration Tests với PostgreSQL..."
+    - echo "================================================================"
+    - ./gradlew test
+
+# ------------------------------------------------------------------------------
+# Stage 2: Đóng gói ứng dụng thành file JAR & Lưu Artifacts (Build Stage)
+# ------------------------------------------------------------------------------
+build_job:
+  stage: build
+  image: gradle:7.6-jdk17
+  before_script:
+    - chmod +x ./gradlew
+  script:
+    - echo "================================================================"
+    - echo "===> Stage 2: Đóng gói ứng dụng thành file JAR..."
+    - echo "================================================================"
+    - ./gradlew build -x test
+  # Cấu hình lưu trữ file JAR sinh ra dưới dạng artifacts
+  artifacts:
+    name: "employee-service-build-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - build/libs/*.jar
+    expire_in: 1 day
+
+# ------------------------------------------------------------------------------
+# Stage 3: Đóng gói Docker Image & Push lên Docker Hub (Dockerize Stage)
+# ------------------------------------------------------------------------------
+dockerize_job:
+  stage: dockerize
+  image: docker:latest
+  # Khởi chạy Docker daemon bên trong container (Docker-in-Docker)
+  services:
+    - docker:dind
+  # Kế thừa artifacts chứa file JAR từ build_job
+  dependencies:
+    - build_job
+  before_script:
+    - echo "================================================================"
+    - echo "===> Đăng nhập Docker Hub sử dụng biến bí mật (CI/CD Variables)..."
+    - echo "================================================================"
+    - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+  script:
+    - echo "================================================================"
+    - echo "===> Đóng gói Docker Image từ file JAR trong artifacts..."
+    - echo "================================================================"
+    - docker build -t "$DOCKER_USERNAME/employee-service:$IMAGE_TAG" -t "$DOCKER_USERNAME/employee-service:latest" .
+    - echo "================================================================"
+    - echo "===> Đẩy Docker Image lên Docker Hub Repository..."
+    - echo "================================================================"
+    - docker push "$DOCKER_USERNAME/employee-service:$IMAGE_TAG"
+    - docker push "$DOCKER_USERNAME/employee-service:latest"
